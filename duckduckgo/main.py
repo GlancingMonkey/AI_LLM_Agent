@@ -1,3 +1,5 @@
+import os
+os.system("pip install -U duckduckgo-search langchain-community")
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
