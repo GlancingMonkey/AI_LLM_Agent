@@ -16,4 +16,3 @@ EXPOSE 8080
 
 # 앱 실행 명령어
 CMD ["python", "main.py"]
-```
