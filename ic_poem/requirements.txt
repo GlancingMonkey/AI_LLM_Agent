@@ -1,5 +1,2 @@
-fastapi
-uvicorn
-langchain
-langchain-google-genai
-pydantic
+fastapi==0.103.1
+uvicorn==0.23.2
