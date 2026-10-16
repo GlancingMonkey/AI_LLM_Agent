@@ -6,3 +6,4 @@ langchain-community
 duckduckgo-search>=5.0.0
 beautifulsoup4
 requests
+ddgs==9.16.0
