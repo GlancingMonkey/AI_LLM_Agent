@@ -10,3 +10,5 @@ PyPDF2
 python-multipart
 sse-starlette
 langchain-text-splitters
+langchain-huggingface
+sentence-transformers
