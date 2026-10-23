@@ -9,3 +9,4 @@ chromadb
 PyPDF2
 pydantic
 sse-starlette
+langchain-text-splitters
