@@ -8,7 +8,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from PyPDF2 import PdfReader
 
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
+# 기존 GoogleGenerativeAIEmbeddings는 지우고 아래 줄을 추가합니다.
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.retrievers.multi_query import MultiQueryRetriever
@@ -33,10 +35,9 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 # Cloud Run은 컨테이너 종료 시 데이터가 초기화되므로 임시 폴더를 사용
 CHROMA_PERSIST_DIR = "/tmp/chromadb"
 
-# 구글 임베딩 및 LLM 초기화 (유저가 404 에러를 피할 수 있도록 버전 고정된 라이브러리 사용)
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004", 
-    google_api_key=GOOGLE_API_KEY
+# 에러가 나던 embeddings = GoogleGenerativeAIEmbeddings(...) 코드를 완전히 지우고 아래로 교체합니다.
+embeddings = HuggingFaceEmbeddings(
+    model_name="jhgan/ko-sroberta-multitask"
 )
 
 llm = ChatGoogleGenerativeAI(
