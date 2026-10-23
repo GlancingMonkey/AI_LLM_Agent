@@ -9,3 +9,4 @@ supabase
 PyPDF2
 python-multipart
 sse-starlette
+langchain-text-splitters
