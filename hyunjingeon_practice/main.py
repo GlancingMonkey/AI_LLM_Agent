@@ -30,7 +30,7 @@ app.add_middleware(
 
 # 환경 변수 로드 (Cloud Run 환경 변수에서 모델명도 유연하게 변경 가능하도록 설정)
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash-lite")  # 필요시 "gemini-3.8-flash-lite" 등으로 변경
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")  # 필요시 "gemini-3.8-flash-lite" 등으로 변경
 
 # Cloud Run 임시 폴더 경로
 CHROMA_PERSIST_DIR = "/tmp/chromadb"
