@@ -1,13 +1,12 @@
 fastapi
 uvicorn
 python-multipart
-langchain
-langchain-core
-langchain-community
-langchain-google-genai<3.0.0  # 404 에러 방지를 위한 버전 고정
-langchain-text-splitters
+langchain>=0.2.0,<0.3.0
+langchain-core>=0.2.0,<0.3.0
+langchain-community>=0.2.0,<0.3.0
+langchain-google-genai>=1.0.0,<2.0.0
+langchain-text-splitters>=0.2.0,<0.3.0
 chromadb
 PyPDF2
 pydantic
 sse-starlette
-
