@@ -41,10 +41,10 @@ embeddings = HuggingFaceEmbeddings(
 )
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.8-flash-lite", # 속도와 가성비가 좋은 모델
-    google_api_key=GOOGLE_API_KEY, 
-    temperature=0, 
-    streaming=True # 실시간 스트리밍 활성화
+    model="models/gemini-3.8-flash-lite",  # 명확한 경로 명시
+    google_api_key=GOOGLE_API_KEY,
+    temperature=0,
+    streaming=True
 )
 
 class ChatRequest(BaseModel):
