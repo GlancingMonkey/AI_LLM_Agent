@@ -3,7 +3,7 @@ uvicorn
 pydantic
 langchain
 langchain-openai
-langchain-google-genai
+langchain-google-genai<3.0.0
 langchain-community
 supabase
 PyPDF2
