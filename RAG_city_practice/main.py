@@ -9,8 +9,8 @@ from pydantic import BaseModel
 from PyPDF2 import PdfReader
 from supabase import create_client, Client
 
-from langchain_openai import OpenAIEmbeddings
-from langchain_google_genai import ChatGoogleGenerativeAI
+# OpenAIEmbeddings 삭제 및 GoogleGenerativeAIEmbeddings 추가
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, AIMessage
@@ -29,11 +29,15 @@ app.add_middleware(
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+
+# 구글 임베딩 모델로 교체 (768 차원)
+embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/text-embedding-004", 
+    google_api_key=GOOGLE_API_KEY
+)
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash-lite", 
@@ -46,7 +50,6 @@ class ChatRequest(BaseModel):
     query: str
     chat_history: list[dict]
 
-# API 경로를 /api/v2/upload 로 변경
 @app.post("/api/v2/upload")
 async def upload_pdf(file: UploadFile = File(...)):
     try:
@@ -67,7 +70,6 @@ async def upload_pdf(file: UploadFile = File(...)):
         chunks = text_splitter.split_text(full_text)
         metadatas = [{"source": file.filename} for _ in chunks]
 
-        # 변경된 테이블 및 쿼리 함수 이름 적용
         vector_store = SupabaseVectorStore(
             client=supabase,
             embedding=embeddings,
@@ -76,13 +78,12 @@ async def upload_pdf(file: UploadFile = File(...)):
         )
         vector_store.add_texts(texts=chunks, metadatas=metadatas)
 
-        return {"message": "RAG 벡터 DB 생성 완료(V2)", "chunks_count": len(chunks), "extracted_text": full_text[:1000] + "..."}
+        return {"message": "구글 임베딩 RAG 벡터 DB 생성 완료", "chunks_count": len(chunks), "extracted_text": full_text[:1000] + "..."}
         
     except Exception as e:
         error_msg = f"에러 발생: {str(e)}\n{traceback.format_exc()}"
         raise HTTPException(status_code=500, detail=error_msg)
 
-# API 경로를 /api/v2/chat 로 변경
 @app.post("/api/v2/chat")
 async def chat_stream(request: ChatRequest):
     try:
@@ -105,7 +106,6 @@ async def chat_stream(request: ChatRequest):
             "chat_history": history
         })
 
-        # 변경된 테이블 및 쿼리 함수 이름 적용
         vector_store = SupabaseVectorStore(
             client=supabase,
             embedding=embeddings,
