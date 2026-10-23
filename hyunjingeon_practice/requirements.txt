@@ -4,7 +4,8 @@ python-multipart
 langchain>=0.2.0,<0.3.0
 langchain-core>=0.2.0,<0.3.0
 langchain-community>=0.2.0,<0.3.0
-langchain-google-genai          <-- 버전 고정 기호(>=, <)를 완전히 지워서 최신 버전이 깔리게 합니다.
+langchain-google-genai
+langchain-huggingface>=0.0.3,<0.1.0
 langchain-text-splitters>=0.2.0,<0.3.0
 chromadb
 PyPDF2
