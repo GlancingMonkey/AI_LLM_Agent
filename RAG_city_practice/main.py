@@ -35,7 +35,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # 구글 임베딩 모델로 교체 (768 차원)
 embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001", 
+    model="text-embedding-004", 
     google_api_key=GOOGLE_API_KEY
 )
 
