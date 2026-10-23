@@ -11,6 +11,7 @@ from supabase import create_client, Client
 
 # OpenAIEmbeddings 삭제 및 GoogleGenerativeAIEmbeddings 추가
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, AIMessage
@@ -33,10 +34,9 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 구글 임베딩 모델로 교체 (768 차원)
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001", 
-    google_api_key=GOOGLE_API_KEY
+# 계속 에러가 났던 구글 embeddings 부분을 완전히 지우고 아래 코드로 교체합니다.
+embeddings = HuggingFaceEmbeddings(
+    model_name="jhgan/ko-sroberta-multitask"
 )
 
 llm = ChatGoogleGenerativeAI(
