@@ -5,8 +5,9 @@ langchain
 langchain-core
 langchain-community
 langchain-google-genai<3.0.0  # 404 에러 방지를 위한 버전 고정
+langchain-text-splitters
 chromadb
 PyPDF2
 pydantic
 sse-starlette
-langchain-text-splitters
+
