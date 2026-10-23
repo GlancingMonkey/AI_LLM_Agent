@@ -41,7 +41,7 @@ embeddings = HuggingFaceEmbeddings(
 )
 
 llm = ChatGoogleGenerativeAI(
-    model="models/gemini-3.8-flash-lite",  # 명확한 경로 명시
+    model="gemini-3.8-flash",  # 또는 "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"
     google_api_key=GOOGLE_API_KEY,
     temperature=0,
     streaming=True
