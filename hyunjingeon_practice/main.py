@@ -65,8 +65,9 @@ async def health_check():
     return {"status": "ok", "model": GEMINI_MODEL}
 
 @app.post("/api/upload")
+@app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    """PDF 파일을 업로드받아 텍스트를 추출하고 Chroma DB에 저장합니다."""
+    global memory_vector_store
     try:
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
@@ -82,24 +83,21 @@ async def upload_pdf(file: UploadFile = File(...)):
         if not full_text.strip():
             raise HTTPException(status_code=400, detail="PDF에서 텍스트를 추출할 수 없습니다.")
 
-        # 텍스트를 청크 단위로 분할
+        # 1. 여기서 chunks가 명확히 정의됩니다!
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         chunks = text_splitter.split_text(full_text)
         metadatas = [{"source": file.filename} for _ in chunks]
 
-        # 기존 DB 폴더가 있으면 충돌 방지를 위해 정리 후 새로 생성
-        if os.path.exists(CHROMA_PERSIST_DIR):
-            shutil.rmtree(CHROMA_PERSIST_DIR, ignore_errors=True)
-
         embeddings = get_embeddings()
-        Chroma.from_texts(
+        
+        # 2. 정의된 chunks를 메모리 전역 변수에 바로 적재
+        memory_vector_store = Chroma.from_texts(
             texts=chunks,
             embedding=embeddings,
-            metadatas=metadatas,
-            persist_directory=CHROMA_PERSIST_DIR
+            metadatas=metadatas
         )
 
-        return {"message": "벡터 DB 생성 완료", "chunks_count": len(chunks)}
+        return {"message": "메모리 벡터 DB 생성 완료", "chunks_count": len(chunks)}
 
     except HTTPException:
         raise
