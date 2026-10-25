@@ -64,9 +64,9 @@ async def health_check():
     """Cloud Run 헬스체크용 기본 엔드포인트"""
     return {"status": "ok", "model": GEMINI_MODEL}
 
+# 1. 업로드 시 /tmp/chromadb에 영구(임시) 저장
 @app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    global memory_vector_store
     try:
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
@@ -82,21 +82,23 @@ async def upload_pdf(file: UploadFile = File(...)):
         if not full_text.strip():
             raise HTTPException(status_code=400, detail="PDF에서 텍스트를 추출할 수 없습니다.")
 
-        # 1. 여기서 chunks가 명확히 정의됩니다!
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         chunks = text_splitter.split_text(full_text)
         metadatas = [{"source": file.filename} for _ in chunks]
 
+        # 기존 /tmp 폴더 초기화 후 안전하게 새로 작성
+        if os.path.exists(CHROMA_PERSIST_DIR):
+            shutil.rmtree(CHROMA_PERSIST_DIR, ignore_errors=True)
+
         embeddings = get_embeddings()
-        
-        # 2. 정의된 chunks를 메모리 전역 변수에 바로 적재
-        memory_vector_store = Chroma.from_texts(
+        Chroma.from_texts(
             texts=chunks,
             embedding=embeddings,
-            metadatas=metadatas
+            metadatas=metadatas,
+            persist_directory=CHROMA_PERSIST_DIR  # /tmp 디렉토리 저장 부활
         )
 
-        return {"message": "메모리 벡터 DB 생성 완료", "chunks_count": len(chunks)}
+        return {"message": "벡터 DB 생성 완료", "chunks_count": len(chunks)}
 
     except HTTPException:
         raise
@@ -104,26 +106,26 @@ async def upload_pdf(file: UploadFile = File(...)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"업로드 처리 중 오류: {str(e)}")
 
+
+# 2. 채팅 시 /tmp/chromadb에서 불러오기
 @app.post("/api/chat")
 async def chat_stream(request: ChatRequest):
-    """사용자의 질의를 받아 MultiQueryRetriever로 검색 후 현진건 스타일로 답변을 스트리밍합니다."""
-
     async def generate():
         try:
-            # DB 존재 여부 먼저 확인 (Cloud Run 재시작으로 초기화되었을 경우 방어)
-            if not os.path.exists(CHROMA_PERSIST_DIR):
+            if not os.path.exists(CHROMA_PERSIST_DIR) or not os.listdir(CHROMA_PERSIST_DIR):
                 err_msg = "⚠️ 아직 업로드된 문서가 없소이다. 먼저 PDF 파일을 올리고 [벡터 DB 생성]을 눌러주시오."
                 yield f"data: {json.dumps({'type': 'chunk', 'content': err_msg}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 return
 
-            # persist_directory 아예 지우고 메모리 상에서만 동작하게 생성
-            vector_store = Chroma.from_texts(
-                texts=chunks, 
-                embedding=embeddings, 
-                metadatas=metadatas
+            embeddings = get_embeddings()
+            vector_store = Chroma(
+                persist_directory=CHROMA_PERSIST_DIR,  # /tmp에서 로드
+                embedding_function=embeddings
             )
             base_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+            
+            # ... (이후 멀티쿼리 및 답변 스트리밍 로직 동일)
 
             # 다중 질문 생성용 LLM(비스트리밍)과 답변 생성용 LLM(스트리밍) 분리
             query_llm = get_llm(streaming=False)
