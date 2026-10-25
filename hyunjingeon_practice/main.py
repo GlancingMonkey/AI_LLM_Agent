@@ -120,10 +120,11 @@ async def chat_stream(request: ChatRequest):
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 return
 
-            embeddings = get_embeddings()
-            vector_store = Chroma(
-                persist_directory=CHROMA_PERSIST_DIR,
-                embedding_function=embeddings
+            # persist_directory 아예 지우고 메모리 상에서만 동작하게 생성
+            vector_store = Chroma.from_texts(
+                texts=chunks, 
+                embedding=embeddings, 
+                metadatas=metadatas
             )
             base_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
