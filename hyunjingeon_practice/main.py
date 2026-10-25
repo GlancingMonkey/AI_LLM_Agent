@@ -65,7 +65,6 @@ async def health_check():
     return {"status": "ok", "model": GEMINI_MODEL}
 
 @app.post("/api/upload")
-@app.post("/api/upload")
 async def upload_pdf(file: UploadFile = File(...)):
     global memory_vector_store
     try:
