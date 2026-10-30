@@ -36,7 +36,7 @@ _embeddings = None
 def get_embeddings():
     global _embeddings
     if _embeddings is None:
-        _embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        _embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004") 
     return _embeddings
 
 def get_llm(streaming: bool = True):
