@@ -41,7 +41,7 @@ def get_embeddings():
 
 def get_llm(streaming: bool = True):
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-3.8-flash",
         temperature=0,
         streaming=streaming
     )
