@@ -1,0 +1,20 @@
+# Web Framework & Server
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12
+pydantic==2.9.2
+
+# Vector DB & Sparse Search (FAISS + BM25)
+faiss-cpu==1.8.0.post1
+rank-bm25==0.2.2
+numpy==1.26.4
+
+# PDF Parsing & Text Processing
+pypdf==4.3.1
+
+# LLM & Embeddings (OpenAI / Gemini compatible)
+openai==1.51.0
+google-generativeai==0.8.3
+tiktoken==0.7.0
+python-dotenv==1.0.1
+
