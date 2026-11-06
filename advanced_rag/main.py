@@ -218,7 +218,7 @@ def call_llm(prompt: str, system_prompt: str = "당신은 전문 AI 어시스턴
     if gemini_key and genai is not None:
         try:
             genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
+            model = genai.GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
             response = model.generate_content(f"{system_prompt}\n\n{prompt}")
             return response.text.strip()
         except Exception as e:
