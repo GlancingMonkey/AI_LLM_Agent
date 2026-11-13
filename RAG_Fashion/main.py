@@ -25,7 +25,7 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 CHROMA_DB_DIR = os.getenv("CHROMA_DB_DIR", "./fashion_chroma_db")
 IMAGE_STORE_DIR = os.getenv("IMAGE_STORE_DIR", "./stored_fashion_images")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 app = FastAPI(title="Atelier AI - Fashion Multimodal RAG API", version="1.0.0")
 
