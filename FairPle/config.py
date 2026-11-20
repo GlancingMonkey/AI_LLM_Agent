@@ -11,7 +11,13 @@ load_dotenv()
 
 class Settings:
     def __init__(self) -> None:
-        self.SUPABASE_URL: str = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+        raw_sb_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+        if raw_sb_url:
+            import urllib.parse
+            parsed = urllib.parse.urlsplit(raw_sb_url)
+            if parsed.scheme and parsed.netloc:
+                raw_sb_url = f"{parsed.scheme}://{parsed.netloc}"
+        self.SUPABASE_URL: str = raw_sb_url
         self.SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "").strip()
         self.SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
         self.GEMINI_API_KEY: str = (
