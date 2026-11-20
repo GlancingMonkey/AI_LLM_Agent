@@ -1,8 +1,5 @@
 """
-페어플 (FairPle) — 보안 미들웨어, JWT 인증 및 관리자 RBAC 의존성 (server/deps.py)
-- X-GAS-Proxy-Secret 검증
-- Supabase Auth / JWT 기반 get_current_user
-- ADMIN_EMAILS 기반 3중 방어 require_admin + admin_audit_logs 기록
+페어플 (FairPle) — 보안 미들웨어, JWT 인증, RBAC 및 통합 데이터 저장소 (server/deps.py)
 """
 
 import base64
@@ -11,9 +8,10 @@ import hmac
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -31,20 +29,185 @@ class UserProfile(BaseModel):
 
 
 # ============================================================================
-# 인메모리 폴백 저장소 (Supabase 미연결 로컬 테스트 / CI 검증 시 자동 동작)
+# 통합 데이터 저장소 (인메모리 + Supabase PostgREST 자동 동기화)
 # ============================================================================
 class LocalMemoryStore:
     def __init__(self) -> None:
         self.users_by_email: Dict[str, Dict[str, Any]] = {}
         self.users_by_id: Dict[str, Dict[str, Any]] = {}
+        self.rooms_by_code: Dict[str, Dict[str, Any]] = {}
+        self.rooms_by_id: Dict[str, Dict[str, Any]] = {}
+        self.room_members: Dict[str, List[Dict[str, Any]]] = {}  # room_id -> list
+        self.tasks_by_id: Dict[str, Dict[str, Any]] = {}
+        self.bids_by_room: Dict[str, List[Dict[str, Any]]] = {}  # room_id -> list
+        self.submissions_by_id: Dict[str, Dict[str, Any]] = {}
+        self.peer_approvals_by_sub: Dict[str, List[Dict[str, Any]]] = {}
+        self.takeover_logs_by_room: Dict[str, List[Dict[str, Any]]] = {}
+        self.report_snapshots_by_hash: Dict[str, Dict[str, Any]] = {}
+        self.chat_usage_by_user_date: Dict[str, int] = {}
         self.admin_audit_logs: List[Dict[str, Any]] = []
+        self._seed_default_demo_room()
+
+    def _seed_default_demo_room(self) -> None:
+        now = datetime.now(timezone.utc)
+        room_id = "00000000-0000-4000-8000-000000000304"
+        code = "MGMT-304"
+
+        demo_members = [
+            {
+                "id": "m-1",
+                "room_id": room_id,
+                "user_id": "u-minsu",
+                "display_name": "김민수",
+                "has_submitted_bid": True,
+                "joined_at": (now - timedelta(hours=10)).isoformat(),
+            },
+            {
+                "id": "m-2",
+                "room_id": room_id,
+                "user_id": "u-jieun",
+                "display_name": "이지은",
+                "has_submitted_bid": True,
+                "joined_at": (now - timedelta(hours=9)).isoformat(),
+            },
+            {
+                "id": "m-3",
+                "room_id": room_id,
+                "user_id": "u-seojun",
+                "display_name": "박서준",
+                "has_submitted_bid": True,
+                "joined_at": (now - timedelta(hours=8)).isoformat(),
+            },
+            {
+                "id": "m-4",
+                "room_id": room_id,
+                "user_id": "u-hyunwoo",
+                "display_name": "최현우",
+                "has_submitted_bid": True,
+                "joined_at": (now - timedelta(hours=7)).isoformat(),
+            },
+        ]
+
+        room_doc = {
+            "id": room_id,
+            "invite_code": code,
+            "title": "경영학원론 3조 팀플 (ESG 경영 혁신사례 발표)",
+            "member_limit": 4,
+            "status": "AUCTION_OPEN",
+            "auction_ends_at": (now + timedelta(hours=14, minutes=28)).isoformat(),
+            "final_due_at": (now + timedelta(days=5)).isoformat(),
+            "is_archived": False,
+            "created_by": "u-jieun",
+            "created_at": (now - timedelta(hours=10)).isoformat(),
+        }
+        self.rooms_by_code[code] = room_doc
+        self.rooms_by_id[room_id] = room_doc
+        self.room_members[room_id] = demo_members
+
+        t1_id = "task-mgmt-01"
+        t2_id = "task-mgmt-02"
+        t3_id = "task-mgmt-03"
+        t4_id = "task-mgmt-04"
+
+        demo_tasks = [
+            {
+                "id": t1_id,
+                "room_id": room_id,
+                "title": "국내외 ESG 경영 사례 3건 분석 리서치",
+                "category": "research",
+                "unit_label": "건",
+                "quantity": 3,
+                "base_points": 15,
+                "awarded_points": 18,
+                "assignee_id": "u-minsu",
+                "assignee_name": "김민수",
+                "status": "IN_REVIEW",
+                "requirements": "글로벌 2곳, 국내 1곳 성공사례 심층 분석 및 출처 URL 필수 기재",
+                "due_at": (now + timedelta(days=2)).isoformat(),
+                "created_at": now.isoformat(),
+            },
+            {
+                "id": t2_id,
+                "room_id": room_id,
+                "title": "발표용 PPT 슬라이드 10장 제작 및 디자인 통일",
+                "category": "ppt",
+                "unit_label": "장",
+                "quantity": 10,
+                "base_points": 40,
+                "awarded_points": 40,
+                "assignee_id": "u-seojun",
+                "assignee_name": "박서준",
+                "status": "ASSIGNED",
+                "requirements": "16:9 와이드 템플릿 적용 및 인포그래픽 다이어그램 10장 완성본",
+                "due_at": (now - timedelta(hours=6)).isoformat(),  # 마감 6시간 경과 (인수 가능 상태!)
+                "created_at": now.isoformat(),
+            },
+            {
+                "id": t3_id,
+                "room_id": room_id,
+                "title": "최종 발표 스크립트 작성 및 5분 실전 발표",
+                "category": "script",
+                "unit_label": "분",
+                "quantity": 5,
+                "base_points": 45,
+                "awarded_points": 27,
+                "assignee_id": "u-hyunwoo",
+                "assignee_name": "최현우",
+                "status": "APPROVED",
+                "requirements": "A4 3매 분량 낭독 대본 작성 및 5분 실전 스피치 + Q&A 대응",
+                "due_at": (now + timedelta(days=3)).isoformat(),
+                "created_at": now.isoformat(),
+            },
+            {
+                "id": t4_id,
+                "room_id": room_id,
+                "title": "팀플 주제 선정 및 발표 목차 구조화 (기획 파트)",
+                "category": "research",
+                "unit_label": "건",
+                "quantity": 3,
+                "base_points": 15,
+                "awarded_points": 15,
+                "assignee_id": "u-jieun",
+                "assignee_name": "이지은",
+                "status": "APPROVED",
+                "requirements": "전체 발표 흐름(서론-본론-결론) 정의 및 세부 아젠다 수립",
+                "due_at": (now - timedelta(days=1)).isoformat(),
+                "created_at": now.isoformat(),
+            },
+        ]
+        for t in demo_tasks:
+            self.tasks_by_id[t["id"]] = t
+
+        sub1_id = "sub-mgmt-01"
+        self.submissions_by_id[sub1_id] = {
+            "id": sub1_id,
+            "task_id": t1_id,
+            "submitted_by": "u-minsu",
+            "external_url": "https://docs.google.com/document/d/demo-esg-research",
+            "summary": "애플 탄소중립 공급망, 파타고니아 순환경제, SK E&S 수소 포트폴리오 3건 비교 요약본(12p)",
+            "proof_image_path": None,
+            "is_late": False,
+            "submitted_at": (now - timedelta(hours=1)).isoformat(),
+        }
+        self.peer_approvals_by_sub[sub1_id] = [
+            {
+                "id": "app-1",
+                "submission_id": sub1_id,
+                "reviewer_id": "u-hyunwoo",
+                "decision": "APPROVED",
+                "reason_code": None,
+                "created_at": (now - timedelta(minutes=30)).isoformat(),
+            }
+        ]
+        self.bids_by_room[room_id] = []
+        self.takeover_logs_by_room[room_id] = []
 
 
 local_store = LocalMemoryStore()
 
 
 # ============================================================================
-# 경량 HMAC-SHA256 JWT 헬퍼 (외부 패키지 버전 충돌 없이 표준 JWT 생성·검증)
+# 경량 HMAC-SHA256 JWT 헬퍼
 # ============================================================================
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
@@ -109,7 +272,6 @@ def supabase_rest_request(
     use_service_role: bool = True,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> Any:
-    """Supabase PostgREST API 직접 호출 헬퍼"""
     if not settings.is_supabase_configured:
         return None
 
@@ -143,7 +305,6 @@ def supabase_rest_request(
 
 
 def supabase_auth_get_user(access_token: str) -> Optional[Dict[str, Any]]:
-    """Supabase Auth /auth/v1/user 엔드포인트로 JWT 유효성 검증"""
     if not settings.is_supabase_configured:
         return None
 
@@ -170,8 +331,7 @@ def record_admin_audit_log(
     target_type: str,
     target_id: str,
     metadata: Optional[Dict[str, Any]] = None,
-) -> None:
-    """admin_audit_logs 테이블 및 로컬 스토어에 감사 로그 기록"""
+) -> Dict[str, Any]:
     entry = {
         "id": str(uuid.uuid4()),
         "admin_email": admin_email,
@@ -187,6 +347,7 @@ def record_admin_audit_log(
             supabase_rest_request("POST", "admin_audit_logs", payload=entry)
         except Exception:
             pass
+    return entry
 
 
 # ============================================================================
@@ -196,10 +357,8 @@ def verify_gas_proxy_secret(
     request: Request,
     x_gas_proxy_secret: Optional[str] = Header(default=None, alias="X-GAS-Proxy-Secret"),
 ) -> None:
-    """INTERNAL_PROXY_SECRET이 설정된 경우 X-GAS-Proxy-Secret 헤더 일치 여부를 검증"""
     expected = settings.INTERNAL_PROXY_SECRET
     if not expected or expected == "fairple-gas-proxy-secret-2026":
-        # 기본 예시값이거나 미설정 시 로컬/개발 편의를 위해 헤더가 있으면 대조하고 없으면 통과
         if x_gas_proxy_secret and expected and x_gas_proxy_secret != expected:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -233,7 +392,6 @@ def get_current_user(
             detail="유효하지 않은 인증 토큰입니다.",
         )
 
-    # 1차: 로컬 서명 토큰 확인
     decoded = decode_local_token(token)
     if decoded:
         email = decoded.get("email", "").lower().strip()
@@ -246,7 +404,6 @@ def get_current_user(
             is_admin=email in settings.ADMIN_EMAILS,
         )
 
-    # 2차: Supabase Auth JWT 검증
     sb_user = supabase_auth_get_user(token)
     if sb_user and sb_user.get("email"):
         email = sb_user["email"].lower().strip()
@@ -254,7 +411,6 @@ def get_current_user(
         user_meta = sb_user.get("user_metadata") or {}
         name = user_meta.get("name") or email.split("@")[0]
 
-        # public.users 테이블에서 이름 조회 시도
         try:
             rows = supabase_rest_request(
                 "GET",
@@ -278,6 +434,17 @@ def get_current_user(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="만료되었거나 유효하지 않은 인증 토큰입니다. 다시 로그인해 주세요.",
     )
+
+
+def get_optional_user(
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+) -> Optional[UserProfile]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    try:
+        return get_current_user(authorization)
+    except Exception:
+        return None
 
 
 # ============================================================================
