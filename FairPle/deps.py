@@ -46,6 +46,7 @@ class LocalMemoryStore:
         self.report_snapshots_by_hash: Dict[str, Dict[str, Any]] = {}
         self.chat_usage_by_user_date: Dict[str, int] = {}
         self.admin_audit_logs: List[Dict[str, Any]] = []
+        self.last_supabase_error: Optional[str] = None
         self._seed_default_demo_room()
 
     def _seed_default_demo_room(self) -> None:
@@ -262,7 +263,7 @@ def decode_local_token(token: str) -> Optional[Dict[str, Any]]:
 
 
 # ============================================================================
-# Supabase REST / Auth 호출 헬퍼
+# Supabase REST / Auth 호출 헬퍼 (httpx + User-Agent 적용으로 Cloudflare 1010 차단 방지)
 # ============================================================================
 def supabase_rest_request(
     method: str,
@@ -274,6 +275,8 @@ def supabase_rest_request(
 ) -> Any:
     if not settings.is_supabase_configured:
         return None
+
+    import httpx
 
     api_key = (
         settings.SUPABASE_SERVICE_ROLE_KEY
@@ -288,39 +291,76 @@ def supabase_rest_request(
         "apikey": api_key,
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "FairPle-CloudRun-Server/1.5",
         "Prefer": "return=representation",
     }
     if extra_headers:
         headers.update(extra_headers)
 
-    data_bytes = (
-        json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        if payload is not None
-        else None
+    resp = httpx.request(
+        method=method.upper(),
+        url=url,
+        json=payload if payload is not None else None,
+        headers=headers,
+        timeout=10.0,
     )
-    req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method.upper())
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        raw = resp.read().decode("utf-8")
-        return json.loads(raw) if raw else None
+    if resp.status_code >= 400:
+        local_store.last_supabase_error = (
+            f"REST {method} {table_or_path} HTTP {resp.status_code}: {resp.text[:300]}"
+        )
+        resp.raise_for_status()
+    return resp.json() if resp.text else None
+
+
+def supabase_auth_request(
+    method: str,
+    auth_path: str,
+    payload: Optional[Any] = None,
+    use_service_role: bool = False,
+    bearer_token: Optional[str] = None,
+) -> Any:
+    if not settings.is_supabase_configured:
+        return None
+
+    import httpx
+
+    api_key = (
+        settings.SUPABASE_SERVICE_ROLE_KEY
+        if (use_service_role and settings.SUPABASE_SERVICE_ROLE_KEY)
+        else (settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_ROLE_KEY)
+    )
+    auth_bearer = bearer_token or api_key
+    url = f"{settings.SUPABASE_URL}/auth/v1/{auth_path.lstrip('/')}"
+
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {auth_bearer}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "FairPle-CloudRun-Server/1.5",
+    }
+
+    resp = httpx.request(
+        method=method.upper(),
+        url=url,
+        json=payload if payload is not None else None,
+        headers=headers,
+        timeout=10.0,
+    )
+    if resp.status_code >= 400:
+        local_store.last_supabase_error = (
+            f"AUTH {method} {auth_path} HTTP {resp.status_code}: {resp.text[:300]}"
+        )
+        resp.raise_for_status()
+    return resp.json() if resp.text else None
 
 
 def supabase_auth_get_user(access_token: str) -> Optional[Dict[str, Any]]:
     if not settings.is_supabase_configured:
         return None
-
-    api_key = settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_ROLE_KEY
-    url = f"{settings.SUPABASE_URL}/auth/v1/user"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "apikey": api_key,
-            "Authorization": f"Bearer {access_token}",
-        },
-        method="GET",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        return supabase_auth_request("GET", "user", bearer_token=access_token)
     except Exception:
         return None
 

@@ -1,15 +1,10 @@
 """
 페어플 (FairPle) — 이메일 회원가입·로그인·세션 확인 라우터 (server/routers/auth.py)
-- POST /api/auth/signup
-- POST /api/auth/login
-- GET  /api/auth/me
+- Supabase Auth (/auth/v1/admin/users + /auth/v1/signup) 및 public.users 테이블 양방향 확실 동기화
 """
 
 import hashlib
-import json
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -23,6 +18,7 @@ from deps import (
     create_access_token,
     get_current_user,
     local_store,
+    supabase_auth_request,
     supabase_rest_request,
     verify_gas_proxy_secret,
 )
@@ -52,10 +48,12 @@ def _hash_password(password: str, email: str) -> str:
 
 def _upsert_public_user(user_id: str, email: str, name: str) -> Dict[str, Any]:
     now_iso = datetime.now(timezone.utc).isoformat()
+    clean_email = email.lower().strip()
+    clean_name = name.strip()
     user_record = {
         "id": user_id,
-        "email": email.lower().strip(),
-        "name": name.strip(),
+        "email": clean_email,
+        "name": clean_name,
         "created_at": now_iso,
     }
 
@@ -64,10 +62,11 @@ def _upsert_public_user(user_id: str, email: str, name: str) -> Dict[str, Any]:
             existing = supabase_rest_request(
                 "GET",
                 "users",
-                query=f"email=eq.{urllib.parse.quote(user_record['email'])}&select=id,email,name,created_at",
+                query=f"email=eq.{urllib.parse.quote(clean_email)}&select=id,email,name,created_at",
             )
             if isinstance(existing, list) and existing:
                 return existing[0]
+
             created = supabase_rest_request(
                 "POST",
                 "users",
@@ -76,10 +75,64 @@ def _upsert_public_user(user_id: str, email: str, name: str) -> Dict[str, Any]:
             )
             if isinstance(created, list) and created:
                 return created[0]
+        except Exception as exc:
+            local_store.last_supabase_error = f"public.users upsert error: {exc}"
+
+    return user_record
+
+
+def _ensure_supabase_auth_user(email: str, password: Optional[str], name: str) -> Optional[str]:
+    """
+    Supabase Auth(auth.users)에 계정을 생성하여 Supabase 대시보드의 Authentication > Users에
+    즉시 표시되도록 보장합니다.
+    1차: SUPABASE_SERVICE_ROLE_KEY가 있으면 /auth/v1/admin/users (email_confirm=True) 호출
+    2차: /auth/v1/signup 호출
+    """
+    if not settings.is_supabase_configured:
+        return None
+
+    clean_email = email.lower().strip()
+    pwd = password or "FairPleTemp123!"
+
+    # 1차: Admin API (/auth/v1/admin/users) - 이메일 확인 대기나 발송 한도(429) 없이 즉시 생성
+    if settings.SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            admin_res = supabase_auth_request(
+                "POST",
+                "admin/users",
+                payload={
+                    "email": clean_email,
+                    "password": pwd,
+                    "email_confirm": True,
+                    "user_metadata": {"name": name},
+                },
+                use_service_role=True,
+            )
+            if isinstance(admin_res, dict) and admin_res.get("id"):
+                return str(admin_res["id"])
         except Exception:
             pass
 
-    return user_record
+    # 2차: 일반 /auth/v1/signup 호출
+    try:
+        signup_res = supabase_auth_request(
+            "POST",
+            "signup",
+            payload={
+                "email": clean_email,
+                "password": pwd,
+                "data": {"name": name},
+            },
+            use_service_role=False,
+        )
+        if isinstance(signup_res, dict):
+            sb_user = signup_res.get("user") or signup_res
+            if isinstance(sb_user, dict) and sb_user.get("id"):
+                return str(sb_user["id"])
+    except Exception:
+        pass
+
+    return None
 
 
 @router.post("/signup")
@@ -92,54 +145,12 @@ def signup(req: SignupRequest) -> Dict[str, Any]:
             detail="올바른 이메일 주소 형식을 입력해 주세요.",
         )
 
-    user_id = str(uuid.uuid4())
-    access_token: Optional[str] = None
-
-    # 1. Supabase Auth가 구성된 경우 /auth/v1/signup 호출 시도
-    if settings.is_supabase_configured:
-        api_key = settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_ROLE_KEY
-        signup_url = f"{settings.SUPABASE_URL}/auth/v1/signup"
-        payload = {
-            "email": email,
-            "password": req.password,
-            "data": {"name": name},
-        }
-        http_req = urllib.request.Request(
-            signup_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "apikey": api_key,
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(http_req, timeout=10) as resp:
-                sb_data = json.loads(resp.read().decode("utf-8"))
-                sb_user = sb_data.get("user") or sb_data
-                if sb_user and sb_user.get("id"):
-                    user_id = sb_user["id"]
-                access_token = sb_data.get("access_token")
-        except urllib.error.HTTPError as http_err:
-            err_body = http_err.read().decode("utf-8", errors="ignore")
-            if "already registered" in err_body.lower() or http_err.code == 422:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="이미 가입된 이메일입니다. 로그인해 주세요.",
-                )
-        except Exception:
-            pass
-
-    # 2. 로컬 스토어 중복 검사 및 저장
-    if email in local_store.users_by_email and not access_token:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="이미 가입된 이메일입니다. 로그인해 주세요.",
-        )
+    # 1. Supabase Auth (Authentication > Users) 및 public.users (Table Editor > users) 동시 생성
+    sb_uid = _ensure_supabase_auth_user(email=email, password=req.password, name=name)
+    user_id = sb_uid or str(uuid.uuid4())
 
     user_doc = _upsert_public_user(user_id=user_id, email=email, name=name)
-    user_id = user_doc.get("id", user_id)
+    user_id = str(user_doc.get("id") or user_id)
 
     local_store.users_by_email[email] = {
         "id": user_id,
@@ -150,14 +161,13 @@ def signup(req: SignupRequest) -> Dict[str, Any]:
     }
     local_store.users_by_id[user_id] = local_store.users_by_email[email]
 
-    # Supabase 이메일 인증 대기 상태이거나 로컬 모드일 때도 즉시 로그인 가능하도록 JWT 발급
-    if not access_token:
-        access_token = create_access_token(user_id=user_id, email=email, name=name)
+    access_token = create_access_token(user_id=user_id, email=email, name=name)
 
     return {
         "status": "success",
         "access_token": access_token,
         "token_type": "bearer",
+        "supabase_synced": settings.is_supabase_configured,
         "user": {
             "id": user_id,
             "email": email,
@@ -174,24 +184,15 @@ def login(req: LoginRequest) -> Dict[str, Any]:
     user_id: Optional[str] = None
     name: Optional[str] = None
 
-    # 1. Supabase Auth /auth/v1/token?grant_type=password 시도
+    # 1. Supabase Auth 로그인 시도
     if settings.is_supabase_configured:
-        api_key = settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_ROLE_KEY
-        token_url = f"{settings.SUPABASE_URL}/auth/v1/token?grant_type=password"
-        payload = {"email": email, "password": req.password}
-        http_req = urllib.request.Request(
-            token_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "apikey": api_key,
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(http_req, timeout=10) as resp:
-                sb_data = json.loads(resp.read().decode("utf-8"))
+            sb_data = supabase_auth_request(
+                "POST",
+                "token?grant_type=password",
+                payload={"email": email, "password": req.password},
+            )
+            if isinstance(sb_data, dict):
                 access_token = sb_data.get("access_token")
                 sb_user = sb_data.get("user") or {}
                 user_id = sb_user.get("id")
@@ -199,7 +200,7 @@ def login(req: LoginRequest) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # 2. 로컬 스토어 확인
+    # 2. 로컬 스토어 또는 public.users 테이블 조회
     local_user = local_store.users_by_email.get(email)
     if not access_token:
         if local_user:
@@ -213,7 +214,6 @@ def login(req: LoginRequest) -> Dict[str, Any]:
             name = local_user["name"]
             access_token = create_access_token(user_id=user_id, email=email, name=name)
         else:
-            # Supabase public.users에 이미 등록된 사용자인지 조회
             if settings.is_supabase_configured:
                 try:
                     rows = supabase_rest_request(
@@ -224,7 +224,9 @@ def login(req: LoginRequest) -> Dict[str, Any]:
                     if isinstance(rows, list) and rows:
                         user_id = rows[0]["id"]
                         name = rows[0]["name"]
-                        access_token = create_access_token(user_id=user_id, email=email, name=name)
+                        access_token = create_access_token(
+                            user_id=user_id, email=email, name=name
+                        )
                 except Exception:
                     pass
 
@@ -235,13 +237,17 @@ def login(req: LoginRequest) -> Dict[str, Any]:
                 )
 
     final_name = name or email.split("@")[0]
-    final_id = user_id or str(uuid.uuid4())
-    _upsert_public_user(user_id=final_id, email=email, name=final_name)
+    # 만약 이전에 인메모리로만 가입되어 Supabase에 없었던 계정이라면 로그인 시 자동으로 Supabase에도 동기화!
+    sb_uid = _ensure_supabase_auth_user(email=email, password=req.password, name=final_name)
+    final_id = str(user_id or sb_uid or uuid.uuid4())
+    user_doc = _upsert_public_user(user_id=final_id, email=email, name=final_name)
+    final_id = str(user_doc.get("id") or final_id)
 
     return {
         "status": "success",
         "access_token": access_token,
         "token_type": "bearer",
+        "supabase_synced": settings.is_supabase_configured,
         "user": {
             "id": final_id,
             "email": email,
@@ -253,6 +259,19 @@ def login(req: LoginRequest) -> Dict[str, Any]:
 
 @router.get("/me")
 def get_me(current_user: UserProfile = Depends(get_current_user)) -> Dict[str, Any]:
+    # 이미 로그인된 세션이 /api/auth/me를 호출할 때도 Supabase public.users 및 auth.users에 자동 백필 동기화!
+    if settings.is_supabase_configured:
+        _ensure_supabase_auth_user(
+            email=current_user.email,
+            password=None,
+            name=current_user.name,
+        )
+        _upsert_public_user(
+            user_id=current_user.id,
+            email=current_user.email,
+            name=current_user.name,
+        )
+
     return {
         "status": "success",
         "user": {

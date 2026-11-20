@@ -39,12 +39,15 @@ app.include_router(admin.router)
 @app.get("/health")
 @app.get("/api/health")
 def health_check() -> Dict[str, Any]:
+    from deps import local_store
     return {
         "status": "ok",
         "service": "fairple-server",
-        "version": "1.5.0",
+        "version": "1.5.1",
         "phase": "Phase A-D Complete",
         "supabase_configured": settings.is_supabase_configured,
+        "supabase_has_service_key": bool(settings.SUPABASE_SERVICE_ROLE_KEY),
+        "last_supabase_error": local_store.last_supabase_error,
         "gemini_model": settings.GEMINI_MODEL,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
