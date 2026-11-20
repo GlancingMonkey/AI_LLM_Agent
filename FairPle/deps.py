@@ -263,8 +263,30 @@ def decode_local_token(token: str) -> Optional[Dict[str, Any]]:
 
 
 # ============================================================================
-# Supabase REST / Auth 호출 헬퍼 (httpx + User-Agent 적용으로 Cloudflare 1010 차단 방지)
+# Supabase REST / Auth 호출 헬퍼 (eyJ... JWT 키 및 신규 sb_secret_/sb_publishable_ 키 모두 호환)
 # ============================================================================
+def _build_supabase_headers(
+    api_key: str,
+    bearer_token: Optional[str] = None,
+    include_bearer_for_apikey: bool = True,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    headers: Dict[str, str] = {
+        "apikey": api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "FairPle-CloudRun-Server/1.5.2",
+    }
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    elif include_bearer_for_apikey:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
 def supabase_rest_request(
     method: str,
     table_or_path: str,
@@ -281,35 +303,68 @@ def supabase_rest_request(
     api_key = (
         settings.SUPABASE_SERVICE_ROLE_KEY
         if use_service_role and settings.SUPABASE_SERVICE_ROLE_KEY
-        else settings.SUPABASE_ANON_KEY
+        else (settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_ROLE_KEY)
     )
     url = f"{settings.SUPABASE_URL}/rest/v1/{table_or_path.lstrip('/')}"
     if query:
         url = f"{url}?{query}"
 
-    headers = {
-        "apikey": api_key,
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "FairPle-CloudRun-Server/1.5",
-        "Prefer": "return=representation",
-    }
+    merged_extra = {"Prefer": "return=representation"}
     if extra_headers:
-        headers.update(extra_headers)
+        merged_extra.update(extra_headers)
 
+    # 1차 시도: eyJ... 키이면 Authorization Bearer 포함, sb_... 신규 키이면 apikey 단독 먼저 시도 후 폴백
+    is_jwt_key = api_key.startswith("eyJ")
+    headers_primary = _build_supabase_headers(
+        api_key=api_key,
+        include_bearer_for_apikey=is_jwt_key,
+        extra_headers=merged_extra,
+    )
     resp = httpx.request(
         method=method.upper(),
         url=url,
         json=payload if payload is not None else None,
-        headers=headers,
+        headers=headers_primary,
         timeout=10.0,
     )
+
+    # 401/403 발생 시 반대 헤더 조합(Bearer 포함/제외) 또는 anon 키로 2차 재시도
+    if resp.status_code in (401, 403):
+        headers_alt = _build_supabase_headers(
+            api_key=api_key,
+            include_bearer_for_apikey=not is_jwt_key,
+            extra_headers=merged_extra,
+        )
+        resp = httpx.request(
+            method=method.upper(),
+            url=url,
+            json=payload if payload is not None else None,
+            headers=headers_alt,
+            timeout=10.0,
+        )
+
+    if resp.status_code in (401, 403) and use_service_role and settings.SUPABASE_ANON_KEY:
+        anon_key = settings.SUPABASE_ANON_KEY
+        headers_anon = _build_supabase_headers(
+            api_key=anon_key,
+            include_bearer_for_apikey=anon_key.startswith("eyJ"),
+            extra_headers=merged_extra,
+        )
+        resp = httpx.request(
+            method=method.upper(),
+            url=url,
+            json=payload if payload is not None else None,
+            headers=headers_anon,
+            timeout=10.0,
+        )
+
     if resp.status_code >= 400:
         local_store.last_supabase_error = (
             f"REST {method} {table_or_path} HTTP {resp.status_code}: {resp.text[:300]}"
         )
         resp.raise_for_status()
+
+    local_store.last_supabase_error = None
     return resp.json() if resp.text else None
 
 
@@ -330,16 +385,14 @@ def supabase_auth_request(
         if (use_service_role and settings.SUPABASE_SERVICE_ROLE_KEY)
         else (settings.SUPABASE_ANON_KEY or settings.SUPABASE_SERVICE_ROLE_KEY)
     )
-    auth_bearer = bearer_token or api_key
     url = f"{settings.SUPABASE_URL}/auth/v1/{auth_path.lstrip('/')}"
+    is_jwt_key = api_key.startswith("eyJ")
 
-    headers = {
-        "apikey": api_key,
-        "Authorization": f"Bearer {auth_bearer}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "FairPle-CloudRun-Server/1.5",
-    }
+    headers = _build_supabase_headers(
+        api_key=api_key,
+        bearer_token=bearer_token,
+        include_bearer_for_apikey=is_jwt_key if not bearer_token else False,
+    )
 
     resp = httpx.request(
         method=method.upper(),
@@ -348,6 +401,19 @@ def supabase_auth_request(
         headers=headers,
         timeout=10.0,
     )
+    if resp.status_code in (401, 403) and not bearer_token:
+        headers_alt = _build_supabase_headers(
+            api_key=api_key,
+            include_bearer_for_apikey=not is_jwt_key,
+        )
+        resp = httpx.request(
+            method=method.upper(),
+            url=url,
+            json=payload if payload is not None else None,
+            headers=headers_alt,
+            timeout=10.0,
+        )
+
     if resp.status_code >= 400:
         local_store.last_supabase_error = (
             f"AUTH {method} {auth_path} HTTP {resp.status_code}: {resp.text[:300]}"

@@ -39,14 +39,28 @@ app.include_router(admin.router)
 @app.get("/health")
 @app.get("/api/health")
 def health_check() -> Dict[str, Any]:
-    from deps import local_store
+    from deps import local_store, supabase_rest_request
+
+    sb_db_ok = False
+    sb_user_count = 0
+    if settings.is_supabase_configured:
+        try:
+            rows = supabase_rest_request("GET", "users", query="select=id,email,name&limit=20")
+            if isinstance(rows, list):
+                sb_db_ok = True
+                sb_user_count = len(rows)
+        except Exception:
+            sb_db_ok = False
+
     return {
         "status": "ok",
         "service": "fairple-server",
-        "version": "1.5.1",
+        "version": "1.5.2",
         "phase": "Phase A-D Complete",
         "supabase_configured": settings.is_supabase_configured,
         "supabase_has_service_key": bool(settings.SUPABASE_SERVICE_ROLE_KEY),
+        "supabase_db_ok": sb_db_ok,
+        "supabase_user_count": sb_user_count,
         "last_supabase_error": local_store.last_supabase_error,
         "gemini_model": settings.GEMINI_MODEL,
         "timestamp": datetime.now(timezone.utc).isoformat(),
