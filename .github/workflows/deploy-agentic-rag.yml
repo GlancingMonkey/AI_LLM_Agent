@@ -1,0 +1,63 @@
+name: Deploy Agentic RAG to Cloud Run
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'agentic_rag/**'
+      - '.github/workflows/deploy-agentic-rag.yml'
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ai-agent-langchain-510401
+  SERVICE_NAME: agentic-rag
+  REGION: asia-northeast3
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Google Auth
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy to Cloud Run
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          source: ./agentic_rag
+          flags: '--allow-unauthenticated'
+          env_vars: |
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            GOOGLE_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            GEMINI_MODEL=gemini-2.5-flash
+
+      - name: Verify HTTP 200 Health Check
+        if: ${{ secrets.GCP_SA_KEY != '' && steps.deploy.outputs.url != '' }}
+        run: |
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.deploy.outputs.url }}/health")
+          echo "Health check HTTP status: $STATUS_CODE"
+          if [ "$STATUS_CODE" -ne 200 ]; then
+            exit 1
+          fi
+
+      - name: Register URL to GAS Properties
+        if: ${{ secrets.GCP_SA_KEY != '' && secrets.GAS_WEBHOOK_URL != '' && steps.deploy.outputs.url != '' }}
+        run: |
+          SERVICE_URL="${{ steps.deploy.outputs.url }}"
+          curl -X POST -L \
+            -H "Content-Type: application/json" \
+            -d '{"serviceName": "agentic-rag", "serviceUrl": "'"$SERVICE_URL"'"}' \
+            "${{ secrets.GAS_WEBHOOK_URL }}"
